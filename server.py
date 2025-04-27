@@ -43,7 +43,7 @@ def handle_client(conn, addr):
                 broadcast({'type': 'score', 'value': msg['value']}, sender_conn=conn)
 
             elif msg['type'] == 'board':
-                # 🔥 Corrected part here: also send the moving piece
+
                 broadcast({
                     'type': 'board',
                     'board': msg['board'],

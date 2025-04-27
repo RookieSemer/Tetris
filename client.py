@@ -5,6 +5,7 @@ import json
 import random
 import time
 import queue
+import pygame
 
 HOST = '127.0.0.1'
 PORT = 5555
@@ -165,6 +166,11 @@ class TetrisClient:
             tk.Label(self.players_frame, text=text, font=self.FONT_LABEL, bg="#444477", fg="white").pack(pady=2, anchor="w")
 
     def start_game(self):
+
+        pygame.mixer.init()
+        pygame.mixer.music.load("tetrisa.mp3")
+        pygame.mixer.music.play(-1)
+
         self.clear_window()
         self.root.geometry("700x650")
 
@@ -230,7 +236,7 @@ class TetrisClient:
     def draw_next_piece(self):
         self.next_piece_canvas.delete("all")
         shape = self.next_piece['shape']
-        tile_size = TILE_SIZE // 2  # smaller for preview
+        tile_size = TILE_SIZE // 2
         offset_x = (6 * TILE_SIZE - len(shape[0]) * tile_size) // 2
         offset_y = (6 * TILE_SIZE - len(shape) * tile_size) // 2
         for y, row in enumerate(shape):
@@ -285,7 +291,7 @@ class TetrisClient:
         self.clear_lines()
         self.current_piece = self.next_piece
         self.next_piece = self.new_piece()
-        self.draw_next_piece()  # <-- FIXED to update immediately
+        self.draw_next_piece()
         if self.collision():
             self.running = False
             self.score_label.config(text="Game Over")
