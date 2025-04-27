@@ -5,11 +5,10 @@ import json
 HOST = '127.0.0.1'
 PORT = 5555
 
-clients = []  # List of connected clients
-ready_status = {}  # Tracks whether each player is ready
-lock = threading.Lock()  # Thread safety for shared data
+clients = []
+ready_status = {}
+lock = threading.Lock()
 
-# Broadcast a message to all clients except the sender (if specified)
 def broadcast(message, sender_conn=None):
     with lock:
         for client in clients:
@@ -20,7 +19,6 @@ def broadcast(message, sender_conn=None):
                 except:
                     pass
 
-# Handle a connected client
 def handle_client(conn, addr):
     global clients, ready_status
     try:
@@ -41,16 +39,16 @@ def handle_client(conn, addr):
                     ready_status[username] = msg['ready']
                 update_lobby()
 
-                # Start game when exactly 2 players are ready
-                with lock:
-                    if len(clients) == 2 and all(ready_status[c['username']] for c in clients):
-                        start_game()
-
             elif msg['type'] == 'score':
                 broadcast({'type': 'score', 'value': msg['value']}, sender_conn=conn)
 
             elif msg['type'] == 'board':
-                broadcast({'type': 'board', 'board': msg['board']}, sender_conn=conn)
+                # 🔥 Corrected part here: also send the moving piece
+                broadcast({
+                    'type': 'board',
+                    'board': msg['board'],
+                    'piece': msg['piece']
+                }, sender_conn=conn)
 
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
@@ -62,7 +60,6 @@ def handle_client(conn, addr):
         conn.close()
         update_lobby()
 
-# Send updated lobby info to all clients
 def update_lobby():
     with lock:
         players = [{'name': c['username'], 'ready': ready_status.get(c['username'], False)} for c in clients]
@@ -73,16 +70,6 @@ def update_lobby():
             except:
                 pass
 
-# Notify all clients to start the game
-def start_game():
-    message = {'type': 'start'}
-    for client in clients:
-        try:
-            client['conn'].send(json.dumps(message).encode())
-        except:
-            pass
-
-# Accept incoming client connections
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))

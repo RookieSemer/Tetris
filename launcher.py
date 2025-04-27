@@ -45,9 +45,11 @@ class TetrisLauncher:
         if not self.is_server_running():
             self.start_server()
 
+        time.sleep(1)
+
         subprocess.Popen([sys.executable, CLIENT_FILE], creationflags=subprocess.CREATE_NEW_CONSOLE)
         if players == 2:
-            time.sleep(1)
+            time.sleep(0.5)
             subprocess.Popen([sys.executable, CLIENT_FILE], creationflags=subprocess.CREATE_NEW_CONSOLE)
 
 if __name__ == "__main__":
