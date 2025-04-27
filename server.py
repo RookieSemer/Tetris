@@ -1,16 +1,15 @@
 import socket
 import threading
 import json
-import tkinter as tk
-from tkinter import messagebox
 
 HOST = '127.0.0.1'
 PORT = 5555
 
-clients = []
-ready_status = {}
-lock = threading.Lock()
+clients = []  # List of connected clients
+ready_status = {}  # Tracks whether each player is ready
+lock = threading.Lock()  # Thread safety for shared data
 
+# Broadcast a message to all clients except the sender (if specified)
 def broadcast(message, sender_conn=None):
     with lock:
         for client in clients:
@@ -21,6 +20,7 @@ def broadcast(message, sender_conn=None):
                 except:
                     pass
 
+# Handle a connected client
 def handle_client(conn, addr):
     global clients, ready_status
     try:
@@ -41,8 +41,10 @@ def handle_client(conn, addr):
                     ready_status[username] = msg['ready']
                 update_lobby()
 
-                if len(clients) == 2 and all(ready_status[c['username']] for c in clients):
-                    start_game()
+                # Start game when exactly 2 players are ready
+                with lock:
+                    if len(clients) == 2 and all(ready_status[c['username']] for c in clients):
+                        start_game()
 
             elif msg['type'] == 'score':
                 broadcast({'type': 'score', 'value': msg['value']}, sender_conn=conn)
@@ -60,6 +62,7 @@ def handle_client(conn, addr):
         conn.close()
         update_lobby()
 
+# Send updated lobby info to all clients
 def update_lobby():
     with lock:
         players = [{'name': c['username'], 'ready': ready_status.get(c['username'], False)} for c in clients]
@@ -70,6 +73,7 @@ def update_lobby():
             except:
                 pass
 
+# Notify all clients to start the game
 def start_game():
     message = {'type': 'start'}
     for client in clients:
@@ -78,29 +82,15 @@ def start_game():
         except:
             pass
 
+# Accept incoming client connections
 def start_server():
-    def server_thread():
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.bind((HOST, PORT))
-        server.listen()
-        update_status(f"Server listening on {HOST}:{PORT}")
-        while True:
-            conn, addr = server.accept()
-            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen()
+    print(f"Server listening on {HOST}:{PORT}")
+    while True:
+        conn, addr = server.accept()
+        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
-    threading.Thread(target=server_thread, daemon=True).start()
-
-def update_status(msg):
-    status_label.config(text=msg)
-
-# Create GUI
-root = tk.Tk()
-root.title("Multiplayer Server")
-
-start_button = tk.Button(root, text="Start Server", command=start_server)
-start_button.pack(pady=10)
-
-status_label = tk.Label(root, text="Server not running", fg="gray")
-status_label.pack(pady=5)
-
-root.mainloop()
+if __name__ == "__main__":
+    start_server()
