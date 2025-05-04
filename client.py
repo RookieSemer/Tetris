@@ -7,9 +7,11 @@ import time
 import queue
 import pygame
 
+# Networking
 HOST = '127.0.0.1'
 PORT = 5555
 
+# Tetris Constants
 TILE_SIZE = 30
 COLUMNS = 10
 ROWS = 20
@@ -31,6 +33,10 @@ class TetrisClient:
         self.root.geometry("400x500")
         self.root.configure(bg="#222244")
         self.root.resizable(False, False)
+
+        self.root.bind("<Key>", self.key_press)
+        self.hold_piece = None
+        self.can_hold = True
 
         self.username = None
         self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -129,7 +135,17 @@ class TetrisClient:
 
     def force_start(self):
         self.is_solo = True
-        self.start_game()
+        self.countdown_and_start()
+
+    def countdown_and_start(self):
+        def do_countdown(i):
+            if i == 0:
+                self.start_game()
+                return
+            self.show_countdown(i)
+            self.root.after(1000, lambda: do_countdown(i - 1))
+
+        do_countdown(3)
 
     def listen_server(self):
         while True:
@@ -154,9 +170,17 @@ class TetrisClient:
                     if hasattr(self, 'opponent_canvas') and self.opponent_canvas.winfo_exists():
                         self.draw_opponent_board(msg['board'])
 
+                elif msg['type'] == 'countdown':  # Added
+                    self.show_countdown(msg['value'])
+
             except Exception as e:
                 print("Error in client listener:", e)
                 break
+
+    def show_countdown(self, value):
+        countdown_label = tk.Label(self.root, text=str(value), font=("Trebuchet MS", 48), fg="white", bg="#222244")
+        countdown_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.root.after(1000, countdown_label.destroy)
 
     def update_lobby(self, players):
         for widget in self.players_frame.winfo_children():
@@ -166,7 +190,6 @@ class TetrisClient:
             tk.Label(self.players_frame, text=text, font=self.FONT_LABEL, bg="#444477", fg="white").pack(pady=2, anchor="w")
 
     def start_game(self):
-
         pygame.mixer.init()
         pygame.mixer.music.load("tetrisa.mp3")
         pygame.mixer.music.play(-1)
@@ -174,34 +197,45 @@ class TetrisClient:
         self.clear_window()
         self.root.geometry("700x650")
 
-        game_frame = tk.Frame(self.root)
-        game_frame.pack()
+        main_frame = tk.Frame(self.root)
+        main_frame.pack()
 
-        self.canvas = tk.Canvas(game_frame, width=COLUMNS*TILE_SIZE, height=ROWS*TILE_SIZE, bg='black')
-        self.canvas.pack(side='left')
+        game_frame = tk.Frame(main_frame)
+        game_frame.pack(side='left')
+
+        self.canvas = tk.Canvas(game_frame, width=COLUMNS * TILE_SIZE, height=ROWS * TILE_SIZE, bg='black')
+        self.canvas.pack()
 
         if not self.is_solo:
-            self.opponent_canvas = tk.Canvas(game_frame, width=COLUMNS*TILE_SIZE, height=ROWS*TILE_SIZE, bg='black')
+            self.opponent_canvas = tk.Canvas(game_frame, width=COLUMNS * TILE_SIZE, height=ROWS * TILE_SIZE, bg='black')
             self.opponent_canvas.pack(side='left', padx=10)
 
-        info_frame = tk.Frame(self.root)
-        info_frame.pack()
+        side_panel = tk.Frame(main_frame)
+        side_panel.pack(side='left', padx=20)
 
-        self.score_label = tk.Label(info_frame, text="Your Score: 0")
-        self.score_label.pack(side='left', padx=10)
+        self.score_label = tk.Label(side_panel, text="Your Score: 0")
+        self.score_label.pack(pady=10)
 
         if not self.is_solo:
-            self.opponent_score_label = tk.Label(info_frame, text="Opponent Score: 0")
-            self.opponent_score_label.pack(side='left', padx=10)
+            self.opponent_score_label = tk.Label(side_panel, text="Opponent Score: 0")
+            self.opponent_score_label.pack(pady=10)
 
-        self.next_piece_canvas = tk.Canvas(self.root, width=6*TILE_SIZE, height=6*TILE_SIZE, bg='grey')
+        # ✅ Next piece canvas
+        tk.Label(side_panel, text="Next Block", font=self.FONT_LABEL).pack()
+        self.next_piece_canvas = tk.Canvas(side_panel, width=6 * TILE_SIZE, height=6 * TILE_SIZE, bg='grey')
         self.next_piece_canvas.pack(pady=10)
 
-        self.board = [[0]*COLUMNS for _ in range(ROWS)]
+        # ➕ Hold piece canvas
+        tk.Label(side_panel, text="Hold Block", font=self.FONT_LABEL).pack()
+        self.hold_piece_canvas = tk.Canvas(side_panel, width=6 * TILE_SIZE, height=6 * TILE_SIZE, bg='darkgrey')
+        self.hold_piece_canvas.pack(pady=10)
+
+        self.board = [[0] * COLUMNS for _ in range(ROWS)]
         self.current_piece = self.new_piece()
         self.next_piece = self.new_piece()
         self.score = 0
         self.running = True
+        self.can_hold = True  # ➕ Reset on game start
 
         self.root.bind("<Key>", self.key_press)
         self.game_loop()
@@ -209,6 +243,49 @@ class TetrisClient:
     def new_piece(self):
         shape = random.choice(SHAPES)
         return {'shape': shape, 'x': COLUMNS // 2 - len(shape[0]) // 2, 'y': 0}
+
+    def draw_hold_piece(self):
+        self.hold_piece_canvas.delete("all")
+        if not self.hold_piece:
+            return
+        shape = self.hold_piece['shape']
+        tile_size = TILE_SIZE // 2
+        offset_x = (6 * TILE_SIZE - len(shape[0]) * tile_size) // 2
+        offset_y = (6 * TILE_SIZE - len(shape) * tile_size) // 2
+        for y, row in enumerate(shape):
+            for x, val in enumerate(row):
+                if val:
+                    self.hold_piece_canvas.create_rectangle(
+                        offset_x + x * tile_size,
+                        offset_y + y * tile_size,
+                        offset_x + (x + 1) * tile_size,
+                        offset_y + (y + 1) * tile_size,
+                        fill="cyan", outline="black"
+                    )
+
+    def hold_current_piece(self):
+        if not self.can_hold:
+            return
+        self.can_hold = False
+        if self.hold_piece is None:
+            self.hold_piece = self.current_piece
+            self.current_piece = self.next_piece
+            self.next_piece = self.new_piece()
+        else:
+            self.hold_piece, self.current_piece = self.current_piece, self.hold_piece
+            self.current_piece['x'] = COLUMNS // 2 - len(self.current_piece['shape'][0]) // 2
+            self.current_piece['y'] = 0
+        self.draw_hold_piece()
+
+    def draw(self):
+        self.canvas.delete("all")
+        temp_board = self.get_temp_board_with_piece()
+        for y in range(ROWS):
+            for x in range(COLUMNS):
+                if temp_board[y][x]:
+                    self.draw_tile(self.canvas, x, y, "green")
+        self.draw_next_piece()
+        self.draw_hold_piece()  # ➕ Draw hold piece
 
     def draw_tile(self, canvas, x, y, color, tile_size=TILE_SIZE):
         canvas.create_rectangle(
@@ -225,6 +302,18 @@ class TetrisClient:
                 if temp_board[y][x]:
                     self.draw_tile(self.canvas, x, y, "green")
         self.draw_next_piece()
+
+    def get_temp_board_with_piece(self):
+        temp_board = [row[:] for row in self.board]
+        shape = self.current_piece['shape']
+        for y, row in enumerate(shape):
+            for x, val in enumerate(row):
+                if val:
+                    px = self.current_piece['x'] + x
+                    py = self.current_piece['y'] + y
+                    if 0 <= px < COLUMNS and 0 <= py < ROWS:
+                        temp_board[py][px] = 1
+        return temp_board
 
     def draw_opponent_board(self, board):
         self.opponent_canvas.delete("all")
@@ -291,7 +380,7 @@ class TetrisClient:
         self.clear_lines()
         self.current_piece = self.next_piece
         self.next_piece = self.new_piece()
-        self.draw_next_piece()
+        self.can_hold = True  # ➕ Allow holding again
         if self.collision():
             self.running = False
             self.score_label.config(text="Game Over")
@@ -301,30 +390,10 @@ class TetrisClient:
         lines_cleared = ROWS - len(new_board)
         self.score += lines_cleared * 100
         self.score_label.config(text=f"Your Score: {self.score}")
-        if not self.is_solo:
-            self.safe_send({"type": "score", "value": self.score})
+        self.safe_send({"type": "score", "value": self.score})
         for _ in range(lines_cleared):
             new_board.insert(0, [0]*COLUMNS)
         self.board = new_board
-
-    def get_temp_board_with_piece(self):
-        temp = [row.copy() for row in self.board]
-        if self.current_piece:
-            for y, row in enumerate(self.current_piece['shape']):
-                for x, val in enumerate(row):
-                    if val:
-                        px = self.current_piece['x'] + x
-                        py = self.current_piece['y'] + y
-                        if 0 <= px < COLUMNS and 0 <= py < ROWS:
-                            temp[py][px] = 1
-        return temp
-
-    def send_board(self):
-        now = time.time()
-        if now - self.last_board_send_time > 0.5:
-            temp_board = self.get_temp_board_with_piece()
-            self.safe_send({"type": "board", "board": temp_board})
-            self.last_board_send_time = now
 
     def game_loop(self):
         if not self.running:
@@ -332,13 +401,15 @@ class TetrisClient:
         if not self.move(0, 1):
             self.freeze()
         self.draw()
-        if not self.is_solo:
-            self.send_board()
+
+        now = time.time()
+        if not self.is_solo and now - self.last_board_send_time > 0.5:
+            self.safe_send({"type": "board", "board": self.board})
+            self.last_board_send_time = now
+
         self.root.after(500, self.game_loop)
 
     def key_press(self, event):
-        if not self.running:
-            return
         if event.keysym == 'Left':
             self.move(-1, 0)
         elif event.keysym == 'Right':
@@ -347,9 +418,9 @@ class TetrisClient:
             self.move(0, 1)
         elif event.keysym == 'Up':
             self.rotate()
+        elif event.keysym in ['Shift_L', 'Shift_R']:  # ➕ Hold on Shift
+            self.hold_current_piece()
         self.draw()
-        if not self.is_solo:
-            self.send_board()
 
     def clear_window(self):
         for widget in self.root.winfo_children():
