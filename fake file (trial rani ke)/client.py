@@ -6,94 +6,10 @@ import random
 import time
 import queue
 import pygame
+import os
+from tkinter import messagebox
 
 
-# Server Code
-def start_server():
-    HOST = '127.0.0.1'
-    PORT = 5555
-
-    clients = []  # List of connected clients
-    ready_status = {}  # Tracks whether each player is ready
-    lock = threading.Lock()  # Thread safety for shared data
-
-    def broadcast(message, sender_conn=None):
-        with lock:
-            for client in clients:
-                conn = client['conn']
-                if conn != sender_conn:
-                    try:
-                        conn.send(json.dumps(message).encode())
-                    except:
-                        pass
-
-    def handle_client(conn, addr):
-        try:
-            data = conn.recv(1024)
-            if not data:
-                return
-            msg = json.loads(data.decode())
-
-            if msg['type'] == 'join':
-                username = msg['username']
-                with lock:
-                    clients.append({'conn': conn, 'addr': addr, 'username': username})
-                    ready_status[username] = False
-                update_lobby()
-
-            while True:
-                data = conn.recv(2048)
-                if not data:
-                    break
-                msg = json.loads(data.decode())
-
-                if msg['type'] == 'ready':
-                    with lock:
-                        ready_status[username] = msg['ready']
-                    update_lobby()
-
-                    with lock:
-                        if len(clients) == 2 and all(ready_status[c['username']] for c in clients):
-                            threading.Thread(target=start_game_with_countdown, daemon=True).start()
-
-                elif msg['type'] == 'score':
-                    broadcast({'type': 'score', 'value': msg['value']}, sender_conn=conn)
-
-                elif msg['type'] == 'board':
-                    broadcast({'type': 'board', 'board': msg['board']}, sender_conn=conn)
-
-        except Exception as e:
-            print(f"Error handling client {addr}: {e}")
-        finally:
-            with lock:
-                clients[:] = [c for c in clients if c['conn'] != conn]
-                if username in ready_status:
-                    del ready_status[username]
-            conn.close()
-            update_lobby()
-
-    def update_lobby():
-        with lock:
-            players = [{'name': c['username'], 'ready': ready_status.get(c['username'], False)} for c in clients]
-            message = {'type': 'lobby', 'players': players}
-            broadcast(message)
-
-    def start_game_with_countdown():
-        for i in range(3, 0, -1):
-            broadcast({'type': 'countdown', 'value': i})
-            time.sleep(1)
-        broadcast({'type': 'start'})
-
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen()
-    print(f"Server listening on {HOST}:{PORT}")
-    while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
-
-
-# Client Code
 class TetrisClient:
     def __init__(self):
         self.root = tk.Tk()
@@ -102,85 +18,224 @@ class TetrisClient:
         self.root.configure(bg="#222244")
         self.root.resizable(False, False)
 
-        self.root.bind("<Key>", self.key_press)
+        # Initialize all game attributes
+        self.canvas = None
+        self.opponent_canvas = None
+        self.score_label = None
+        self.opponent_score_label = None
+        self.next_piece_canvas = None
+        self.hold_piece_canvas = None
+        self.opponent_next_canvas = None
+        self.opponent_hold_canvas = None
+        self.players_frame = None
+        self.ready_button = None
+        self.start_now_button = None
+        self.status_label = None
+        self.bg_canvas = None
+        self.high_score_label = None
+        self.high_scores_button = None
+        self.high_scores_window = None
+
         self.hold_piece = None
         self.can_hold = True
-
         self.username = None
-        self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.conn.connect(('127.0.0.1', 5555))
-
+        self.password = None
+        self.conn = None
         self.send_queue = queue.Queue()
         self.is_solo = False
         self.last_board_send_time = 0
+        self.running = False
+        self.board = []
+        self.current_piece = None
+        self.next_piece = None
+        self.score = 0
+        self.server_ip = '127.0.0.1'
+        self.server_port = 5555
+        self.high_scores = {}
 
         self.FONT_NAME = "Trebuchet MS"
         self.FONT_TITLE = (self.FONT_NAME, 18, "bold")
         self.FONT_LABEL = (self.FONT_NAME, 12)
         self.FONT_BUTTON = (self.FONT_NAME, 10, "bold")
 
-        self.show_login()
+        # Create files if they don't exist
+        if not os.path.exists('users.txt'):
+            with open('users.txt', 'w') as f:
+                pass
+        if not os.path.exists('highscores.txt'):
+            with open('highscores.txt', 'w') as f:
+                pass
+        else:
+            self.load_high_scores()
 
-        threading.Thread(target=self.listen_server, daemon=True).start()
-        threading.Thread(target=self.sender_thread, daemon=True).start()
+        self.show_login_screen()
+        self.connect_to_server()
 
         self.root.mainloop()
+
+    def load_high_scores(self):
+        try:
+            with open('highscores.txt', 'r') as f:
+                for line in f:
+                    parts = line.strip().split(':')
+                    if len(parts) == 2:
+                        username, score = parts
+                        self.high_scores[username] = int(score)
+        except:
+            pass
+
+    def save_high_score(self):
+        if self.username and self.score > self.high_scores.get(self.username, 0):
+            self.high_scores[self.username] = self.score
+            with open('highscores.txt', 'w') as f:
+                for username, score in self.high_scores.items():
+                    f.write(f"{username}:{score}\n")
+
+    def show_high_scores(self):
+        self.high_scores_window = tk.Toplevel(self.root)
+        self.high_scores_window.title("High Scores")
+        self.high_scores_window.geometry("300x400")
+        self.high_scores_window.configure(bg="#222244")
+
+        tk.Label(self.high_scores_window, text="High Scores", font=self.FONT_TITLE, bg="#222244", fg="white").pack(
+            pady=10)
+
+        scores_frame = tk.Frame(self.high_scores_window, bg="#333366")
+        scores_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        # Sort high scores in descending order
+        sorted_scores = sorted(self.high_scores.items(), key=lambda x: x[1], reverse=True)
+
+        for i, (username, score) in enumerate(sorted_scores[:10]):  # Show top 10
+            tk.Label(scores_frame,
+                     text=f"{i + 1}. {username}: {score}",
+                     font=self.FONT_LABEL,
+                     bg="#333366",
+                     fg="white").pack(pady=2, anchor="w")
+
+    def connect_to_server(self):
+        try:
+            self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.conn.connect((self.server_ip, self.server_port))
+            threading.Thread(target=self.listen_server, daemon=True).start()
+            threading.Thread(target=self.sender_thread, daemon=True).start()
+            return True
+        except Exception as e:
+            messagebox.showerror("Connection Error", f"Could not connect to server: {e}")
+            return False
 
     def sender_thread(self):
         while True:
             msg = self.send_queue.get()
             try:
-                self.conn.sendall(msg.encode())
+                if self.conn:
+                    self.conn.sendall(msg.encode())
             except Exception as e:
                 print("Error sending:", e)
 
     def safe_send(self, msg_dict):
         self.send_queue.put(json.dumps(msg_dict))
 
-    def show_login(self):
+    def show_login_screen(self):
         self.clear_window()
 
         self.bg_canvas = tk.Canvas(self.root, width=400, height=500, bg="#222244", highlightthickness=0)
         self.bg_canvas.pack(fill="both", expand=True)
 
-        self.circles = []
-        for _ in range(20):
-            x = random.randint(0, 400)
-            y = random.randint(0, 500)
-            r = random.randint(10, 30)
-            circle = self.bg_canvas.create_oval(x, y, x + r, y + r, fill="#444477", outline="")
-            self.circles.append((circle, random.choice([-1, 1]), random.choice([-1, 1])))
+        login_frame = tk.Frame(self.root, bg="#333366", padx=20, pady=20)
+        login_frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        self.animate_background()
+        tk.Label(login_frame, text="Tetris Login", font=self.FONT_TITLE, bg="#333366", fg="white").pack(pady=10)
 
-        login_frame = tk.Frame(self.bg_canvas, bg="#333366", padx=20, pady=20)
-        login_window = self.bg_canvas.create_window(200, 250, window=login_frame)
-
-        tk.Label(login_frame, text="Welcome to Tetris", font=self.FONT_TITLE, bg="#333366", fg="white").pack(pady=10)
         tk.Label(login_frame, text="Username:", font=self.FONT_LABEL, bg="#333366", fg="white").pack(anchor="w")
-        self.name_entry = tk.Entry(login_frame, font=self.FONT_LABEL)
-        self.name_entry.pack(fill="x", pady=5)
+        self.login_user_entry = tk.Entry(login_frame, font=self.FONT_LABEL)
+        self.login_user_entry.pack(fill="x", pady=5)
 
-        tk.Button(login_frame, text="Join", font=self.FONT_BUTTON, bg="#44aa88", fg="white",
-                  command=self.join_lobby).pack(pady=10)
+        tk.Label(login_frame, text="Password:", font=self.FONT_LABEL, bg="#333366", fg="white").pack(anchor="w")
+        self.login_pass_entry = tk.Entry(login_frame, font=self.FONT_LABEL, show="*")
+        self.login_pass_entry.pack(fill="x", pady=5)
 
-    def animate_background(self):
-        for i, (circle, dx, dy) in enumerate(self.circles):
-            self.bg_canvas.move(circle, dx, dy)
-            coords = self.bg_canvas.coords(circle)
-            if coords[0] <= 0 or coords[2] >= 400:
-                dx = -dx
-            if coords[1] <= 0 or coords[3] >= 500:
-                dy = -dy
-            self.circles[i] = (circle, dx, dy)
-        self.root.after(50, self.animate_background)
+        tk.Button(login_frame, text="Login", font=self.FONT_BUTTON, bg="#44aa88", fg="white",
+                  command=self.attempt_login).pack(pady=10, fill='x')
+        tk.Button(login_frame, text="Register", font=self.FONT_BUTTON, bg="#88aaff", fg="white",
+                  command=self.show_register_screen).pack(pady=5, fill='x')
 
-    def join_lobby(self):
-        username = self.name_entry.get()
-        if username:
-            self.username = username
-            self.safe_send({"type": "join", "username": username})
-            self.lobby_screen()
+    def show_register_screen(self):
+        self.clear_window()
+
+        register_frame = tk.Frame(self.root, bg="#333366", padx=20, pady=20)
+        register_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(register_frame, text="Register Account", font=self.FONT_TITLE, bg="#333366", fg="white").pack(pady=10)
+
+        tk.Label(register_frame, text="Username:", font=self.FONT_LABEL, bg="#333366", fg="white").pack(anchor="w")
+        self.reg_user_entry = tk.Entry(register_frame, font=self.FONT_LABEL)
+        self.reg_user_entry.pack(fill="x", pady=5)
+
+        tk.Label(register_frame, text="Password:", font=self.FONT_LABEL, bg="#333366", fg="white").pack(anchor="w")
+        self.reg_pass_entry = tk.Entry(register_frame, font=self.FONT_LABEL, show="*")
+        self.reg_pass_entry.pack(fill="x", pady=5)
+
+        tk.Label(register_frame, text="Confirm Password:", font=self.FONT_LABEL, bg="#333366", fg="white").pack(
+            anchor="w")
+        self.reg_confirm_entry = tk.Entry(register_frame, font=self.FONT_LABEL, show="*")
+        self.reg_confirm_entry.pack(fill="x", pady=5)
+
+        tk.Button(register_frame, text="Register", font=self.FONT_BUTTON, bg="#44aa88", fg="white",
+                  command=self.attempt_register).pack(pady=10, fill='x')
+        tk.Button(register_frame, text="Back to Login", font=self.FONT_BUTTON, bg="#aa4444", fg="white",
+                  command=self.show_login_screen).pack(pady=5, fill='x')
+
+    def attempt_login(self):
+        username = self.login_user_entry.get()
+        password = self.login_pass_entry.get()
+
+        if not username or not password:
+            messagebox.showerror("Error", "Username and password are required")
+            return
+
+        # Check credentials in the text file
+        with open('users.txt', 'r') as f:
+            for line in f:
+                parts = line.strip().split(':')
+                if len(parts) == 2:
+                    stored_user, stored_pass = parts
+                    if stored_user == username and stored_pass == password:
+                        self.username = username
+                        self.password = password
+                        self.safe_send({"type": "join", "username": username})
+                        self.lobby_screen()
+                        return
+
+        messagebox.showerror("Error", "Invalid username or password")
+
+    def attempt_register(self):
+        username = self.reg_user_entry.get()
+        password = self.reg_pass_entry.get()
+        confirm = self.reg_confirm_entry.get()
+
+        if not username or not password:
+            messagebox.showerror("Error", "Username and password are required")
+            return
+
+        if password != confirm:
+            messagebox.showerror("Error", "Passwords do not match")
+            return
+
+        # Check if username already exists
+        with open('users.txt', 'r') as f:
+            for line in f:
+                parts = line.strip().split(':')
+                if len(parts) > 0 and parts[0] == username:
+                    messagebox.showerror("Error", "Username already exists")
+                    return
+
+        # Add new user
+        with open('users.txt', 'a') as f:
+            f.write(f"{username}:{password}\n")
+
+        messagebox.showinfo("Success", "Registration successful!")
+        self.show_login_screen()
 
     def lobby_screen(self):
         self.clear_window()
@@ -201,6 +256,11 @@ class TetrisClient:
                                           command=self.force_start)
         self.start_now_button.pack(pady=5)
 
+        self.high_scores_button = tk.Button(self.root, text="High Scores", font=self.FONT_BUTTON, bg="#aa88ff",
+                                            fg="white",
+                                            command=self.show_high_scores)
+        self.high_scores_button.pack(pady=5)
+
     def toggle_ready(self):
         self.ready = not self.ready
         self.safe_send({"type": "ready", "ready": self.ready})
@@ -211,10 +271,13 @@ class TetrisClient:
 
     def force_start(self):
         self.is_solo = True
+        self.ready = True  # Mark as ready for solo mode
         self.countdown_and_start()
 
     def countdown_and_start(self):
         def do_countdown(i):
+            if not self.is_solo and not self.ready:  # Check if cancelled
+                return
             if i == 0:
                 self.start_game()
                 return
@@ -235,42 +298,61 @@ class TetrisClient:
                     self.root.after(0, self.update_lobby, msg['players'])
 
                 elif msg['type'] == 'start':
-                    self.is_solo = False
-                    self.start_game()
+                    self.is_solo = msg.get('is_solo', False)
+                    self.root.after(0, self.start_game)
 
                 elif msg['type'] == 'score' and not self.is_solo:
-                    if hasattr(self, 'opponent_score_label'):
+                    if self.opponent_score_label:
                         self.opponent_score_label.config(text=f"Opponent Score: {msg['value']}")
 
                 elif msg['type'] == 'board' and not self.is_solo:
-                    if hasattr(self, 'opponent_canvas'):
+                    if self.opponent_canvas:
                         self.draw_opponent_board(msg['board'])
 
                 elif msg['type'] == 'countdown':
-                    self.show_countdown(msg['value'])
+                    self.root.after(0, self.show_countdown, msg['value'])
+
+                elif msg['type'] == 'game_cancelled':
+                    self.root.after(0, self.cancel_countdown)
+                    self.root.after(0, self.status_label.config, {"text": "Game cancelled - other player left"})
 
             except Exception as e:
                 print("Error in client listener:", e)
                 break
 
     def show_countdown(self, value):
-        countdown_label = tk.Label(self.root, text=str(value), font=("Trebuchet MS", 48), fg="white", bg="#222244")
-        countdown_label.place(relx=0.5, rely=0.5, anchor="center")
-        self.root.after(1000, countdown_label.destroy)
+        if hasattr(self, 'countdown_label'):
+            self.countdown_label.destroy()
+        self.countdown_label = tk.Label(self.root, text=str(value), font=("Trebuchet MS", 48), fg="white", bg="#222244")
+        self.countdown_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.root.after(1000, self.countdown_label.destroy)
+
+    def cancel_countdown(self):
+        if hasattr(self, 'countdown_label'):
+            self.countdown_label.destroy()
+        self.status_label.config(text="Countdown cancelled")
 
     def update_lobby(self, players):
+        if not self.players_frame:
+            return
+
+        # Clear the frame first
         for widget in self.players_frame.winfo_children():
             widget.destroy()
 
-        if not isinstance(players, list):
-            return  # Make sure we have a list of players
+        # Add a title label
+        title_label = tk.Label(
+            self.players_frame,
+            text="Players in Lobby:",
+            font=self.FONT_LABEL,
+            bg="#444477",
+            fg="white"
+        )
+        title_label.pack(pady=5, anchor="w")
 
+        # Add each player with their status
         for player in players:
-            if not isinstance(player, dict):
-                continue  # Skip if not a dictionary
-
-            # Safely get the username and ready status
-            username = player.get('username') or player.get('name', 'Unknown')
+            username = player.get('name', 'Unknown')
             is_ready = player.get('ready', False)
 
             status = "Ready" if is_ready else "Not Ready"
@@ -285,19 +367,27 @@ class TetrisClient:
             )
             player_label.pack(pady=2, anchor="w")
 
+        # Update status label based on number of players
+        if len(players) == 1:
+            self.status_label.config(text="Waiting for another player...")
+        elif len(players) >= 2:
+            self.status_label.config(text=f"{len(players)} players in lobby - ready up!")
+
     def start_game(self):
-        pygame.mixer.init()
-        try:
-            pygame.mixer.music.load("tetrisa.mp3")
-            pygame.mixer.music.play(-1)
-        except:
-            pass
+
 
         self.clear_window()
+
+        pygame.mixer.init()
+        pygame.mixer.music.load("tetrisa.wav")
+        pygame.mixer.music.set_volume(1.0)  # Ensure volume is full
+        pygame.mixer.music.play(-1)
+
+        # Set window size based on game mode
         if self.is_solo:
-            self.root.geometry("700x650")
+            self.root.geometry("700x650")  # Smaller window for solo
         else:
-            self.root.geometry("1000x650")
+            self.root.geometry("1000x650")  # Larger window for multiplayer
 
         main_frame = tk.Frame(self.root)
         main_frame.pack()
@@ -305,39 +395,56 @@ class TetrisClient:
         game_frame = tk.Frame(main_frame)
         game_frame.pack(side='left')
 
+        # Main game canvas
         self.canvas = tk.Canvas(game_frame, width=300, height=600, bg='black')
         self.canvas.pack(side='left', padx=10)
 
+        # Only show opponent canvas in multiplayer mode
         if not self.is_solo:
             self.opponent_canvas = tk.Canvas(game_frame, width=300, height=600, bg='black')
             self.opponent_canvas.pack(side='left', padx=10)
 
-        side_panel = tk.Frame(main_frame)
+        side_panel = tk.Frame(main_frame, width=200)
         side_panel.pack(side='left', padx=20)
 
+        # Score display
         self.score_label = tk.Label(side_panel, text="Your Score: 0", font=self.FONT_LABEL)
         self.score_label.pack(pady=10)
 
+        # Only show opponent score in multiplayer mode
         if not self.is_solo:
             self.opponent_score_label = tk.Label(side_panel, text="Opponent Score: 0", font=self.FONT_LABEL)
             self.opponent_score_label.pack(pady=10)
 
-            tk.Label(side_panel, text="Opponent Next", font=self.FONT_LABEL).pack()
-            self.opponent_next_canvas = tk.Canvas(side_panel, width=120, height=120, bg='lightgrey')
-            self.opponent_next_canvas.pack(pady=10)
+        # Next piece display
+        next_frame = tk.Frame(side_panel)
+        next_frame.pack(pady=10)
+        tk.Label(next_frame, text="Next Block", font=self.FONT_LABEL).pack()
+        self.next_piece_canvas = tk.Canvas(next_frame, width=120, height=120, bg='grey')
+        self.next_piece_canvas.pack()
 
-            tk.Label(side_panel, text="Opponent Hold", font=self.FONT_LABEL).pack()
-            self.opponent_hold_canvas = tk.Canvas(side_panel, width=120, height=120, bg='lightgrey')
-            self.opponent_hold_canvas.pack(pady=10)
+        # Hold piece display
+        hold_frame = tk.Frame(side_panel)
+        hold_frame.pack(pady=10)
+        tk.Label(hold_frame, text="Hold Block", font=self.FONT_LABEL).pack()
+        self.hold_piece_canvas = tk.Canvas(hold_frame, width=120, height=120, bg='darkgrey')
+        self.hold_piece_canvas.pack()
 
-        tk.Label(side_panel, text="Next Block", font=self.FONT_LABEL).pack()
-        self.next_piece_canvas = tk.Canvas(side_panel, width=120, height=120, bg='grey')
-        self.next_piece_canvas.pack(pady=10)
+        # Only show opponent pieces in multiplayer mode
+        if not self.is_solo:
+            opp_next_frame = tk.Frame(side_panel)
+            opp_next_frame.pack(pady=10)
+            tk.Label(opp_next_frame, text="Opponent Next", font=self.FONT_LABEL).pack()
+            self.opponent_next_canvas = tk.Canvas(opp_next_frame, width=120, height=120, bg='lightgrey')
+            self.opponent_next_canvas.pack()
 
-        tk.Label(side_panel, text="Hold Block", font=self.FONT_LABEL).pack()
-        self.hold_piece_canvas = tk.Canvas(side_panel, width=120, height=120, bg='darkgrey')
-        self.hold_piece_canvas.pack(pady=10)
+            opp_hold_frame = tk.Frame(side_panel)
+            opp_hold_frame.pack(pady=10)
+            tk.Label(opp_hold_frame, text="Opponent Hold", font=self.FONT_LABEL).pack()
+            self.opponent_hold_canvas = tk.Canvas(opp_hold_frame, width=120, height=120, bg='lightgrey')
+            self.opponent_hold_canvas.pack()
 
+        # Initialize game state
         self.board = [[0] * 10 for _ in range(20)]
         self.current_piece = self.new_piece()
         self.next_piece = self.new_piece()
@@ -362,23 +469,24 @@ class TetrisClient:
         return {'shape': shape, 'x': 5 - len(shape[0]) // 2, 'y': 0}
 
     def draw_hold_piece(self):
-        self.hold_piece_canvas.delete("all")
-        if not self.hold_piece:
-            return
-        shape = self.hold_piece['shape']
-        tile_size = 15
-        offset_x = (120 - len(shape[0]) * tile_size) // 2
-        offset_y = (120 - len(shape) * tile_size) // 2
-        for y, row in enumerate(shape):
-            for x, val in enumerate(row):
-                if val:
-                    self.hold_piece_canvas.create_rectangle(
-                        offset_x + x * tile_size,
-                        offset_y + y * tile_size,
-                        offset_x + (x + 1) * tile_size,
-                        offset_y + (y + 1) * tile_size,
-                        fill="cyan", outline="black"
-                    )
+        if self.hold_piece_canvas:
+            self.hold_piece_canvas.delete("all")
+            if not self.hold_piece:
+                return
+            shape = self.hold_piece['shape']
+            tile_size = 15
+            offset_x = (120 - len(shape[0]) * tile_size) // 2
+            offset_y = (120 - len(shape) * tile_size) // 2
+            for y, row in enumerate(shape):
+                for x, val in enumerate(row):
+                    if val:
+                        self.hold_piece_canvas.create_rectangle(
+                            offset_x + x * tile_size,
+                            offset_y + y * tile_size,
+                            offset_x + (x + 1) * tile_size,
+                            offset_y + (y + 1) * tile_size,
+                            fill="cyan", outline="black"
+                        )
 
     def hold_current_piece(self):
         if not self.can_hold:
@@ -395,21 +503,23 @@ class TetrisClient:
         self.draw_hold_piece()
 
     def draw_tile(self, canvas, x, y, color, tile_size=30):
-        canvas.create_rectangle(
-            x * tile_size, y * tile_size,
-            (x + 1) * tile_size, (y + 1) * tile_size,
-            fill=color, outline="gray"
-        )
+        if canvas:
+            canvas.create_rectangle(
+                x * tile_size, y * tile_size,
+                (x + 1) * tile_size, (y + 1) * tile_size,
+                fill=color, outline="gray"
+            )
 
     def draw(self):
-        self.canvas.delete("all")
-        temp_board = self.get_temp_board_with_piece()
-        for y in range(20):
-            for x in range(10):
-                if temp_board[y][x]:
-                    self.draw_tile(self.canvas, x, y, "green")
-        self.draw_next_piece()
-        self.draw_hold_piece()
+        if self.canvas:
+            self.canvas.delete("all")
+            temp_board = self.get_temp_board_with_piece()
+            for y in range(20):
+                for x in range(10):
+                    if temp_board[y][x]:
+                        self.draw_tile(self.canvas, x, y, "green")
+            self.draw_next_piece()
+            self.draw_hold_piece()
 
     def get_temp_board_with_piece(self):
         temp_board = [row[:] for row in self.board]
@@ -424,28 +534,30 @@ class TetrisClient:
         return temp_board
 
     def draw_opponent_board(self, board):
-        self.opponent_canvas.delete("all")
-        for y in range(20):
-            for x in range(10):
-                if board[y][x]:
-                    self.draw_tile(self.opponent_canvas, x, y, "red")
+        if self.opponent_canvas:
+            self.opponent_canvas.delete("all")
+            for y in range(20):
+                for x in range(10):
+                    if board[y][x]:
+                        self.draw_tile(self.opponent_canvas, x, y, "red")
 
     def draw_next_piece(self):
-        self.next_piece_canvas.delete("all")
-        shape = self.next_piece['shape']
-        tile_size = 15
-        offset_x = (120 - len(shape[0]) * tile_size) // 2
-        offset_y = (120 - len(shape) * tile_size) // 2
-        for y, row in enumerate(shape):
-            for x, val in enumerate(row):
-                if val:
-                    self.next_piece_canvas.create_rectangle(
-                        offset_x + x * tile_size,
-                        offset_y + y * tile_size,
-                        offset_x + (x + 1) * tile_size,
-                        offset_y + (y + 1) * tile_size,
-                        fill="purple", outline="black"
-                    )
+        if self.next_piece_canvas:
+            self.next_piece_canvas.delete("all")
+            shape = self.next_piece['shape']
+            tile_size = 15
+            offset_x = (120 - len(shape[0]) * tile_size) // 2
+            offset_y = (120 - len(shape) * tile_size) // 2
+            for y, row in enumerate(shape):
+                for x, val in enumerate(row):
+                    if val:
+                        self.next_piece_canvas.create_rectangle(
+                            offset_x + x * tile_size,
+                            offset_y + y * tile_size,
+                            offset_x + (x + 1) * tile_size,
+                            offset_y + (y + 1) * tile_size,
+                            fill="purple", outline="black"
+                        )
 
     def move(self, dx, dy):
         self.current_piece['x'] += dx
@@ -491,14 +603,22 @@ class TetrisClient:
         self.can_hold = True
         if self.collision():
             self.running = False
-            self.score_label.config(text="Game Over")
+            if self.score_label:
+                self.score_label.config(text="Game Over")
+            self.save_high_score()
+            self.root.after(3000, self.lobby_screen)
 
     def clear_lines(self):
         new_board = [row for row in self.board if any(val == 0 for val in row)]
         lines_cleared = 20 - len(new_board)
         self.score += lines_cleared * 100
-        self.score_label.config(text=f"Your Score: {self.score}")
-        self.safe_send({"type": "score", "value": self.score})
+        if self.score_label:
+            self.score_label.config(text=f"Your Score: {self.score}")
+
+        # Only send score updates in multiplayer mode
+        if not self.is_solo:
+            self.safe_send({"type": "score", "value": self.score})
+
         for _ in range(lines_cleared):
             new_board.insert(0, [0] * 10)
         self.board = new_board
@@ -506,10 +626,12 @@ class TetrisClient:
     def game_loop(self):
         if not self.running:
             return
+
         if not self.move(0, 1):
             self.freeze()
         self.draw()
 
+        # Only send board updates in multiplayer mode
         now = time.time()
         if not self.is_solo and now - self.last_board_send_time > 0.5:
             self.safe_send({"type": "board", "board": self.board})
@@ -518,28 +640,54 @@ class TetrisClient:
         self.root.after(500, self.game_loop)
 
     def key_press(self, event):
-        if event.keysym == 'Left':
+        if not self.running or not self.canvas:
+            return
+
+        if event.keysym in ['a', 'Left']:
             self.move(-1, 0)
-        elif event.keysym == 'Right':
+        elif event.keysym in ['d', 'Right']:
             self.move(1, 0)
-        elif event.keysym == 'Down':
+        elif event.keysym in ['s', 'Down']:
             self.move(0, 1)
-        elif event.keysym == 'Up':
+        elif event.keysym in ['w', 'Up']:
             self.rotate()
         elif event.keysym in ['Shift_L', 'Shift_R']:
             self.hold_current_piece()
         self.draw()
 
     def clear_window(self):
+        # Stop any music playing
+        try:
+            pygame.mixer.music.stop()
+        except:
+            pass
+
+        # Unbind keys to prevent ghost inputs
+        try:
+            self.root.unbind("<Key>")
+        except:
+            pass
+
+        # Destroy all widgets
         for widget in self.root.winfo_children():
             widget.destroy()
 
+        # Reset critical game attributes
+        self.canvas = None
+        self.opponent_canvas = None
+        self.score_label = None
+        self.opponent_score_label = None
+        self.next_piece_canvas = None
+        self.hold_piece_canvas = None
+        self.opponent_next_canvas = None
+        self.opponent_hold_canvas = None
+        self.players_frame = None
+        self.ready_button = None
+        self.start_now_button = None
+        self.status_label = None
+        self.bg_canvas = None
+        self.running = False
 
-# Main Execution
+
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "server":
-        start_server()
-    else:
-        TetrisClient()
+    TetrisClient()

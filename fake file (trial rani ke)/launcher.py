@@ -21,7 +21,7 @@ class TetrisLauncher:
 
         self.players_var = tk.IntVar(value=1)
         tk.Label(self.root, text="How many players?").pack()
-        tk.Spinbox(self.root, from_=1, to=2, textvariable=self.players_var).pack(pady=5)
+        tk.Spinbox(self.root, from_=1, to=4, textvariable=self.players_var).pack(pady=5)
 
         tk.Button(self.root, text="Launch Game", command=self.launch_game).pack(pady=15)
         tk.Button(self.root, text="Exit", command=self.root.quit).pack()
