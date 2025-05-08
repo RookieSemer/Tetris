@@ -297,9 +297,18 @@ class TetrisClient:
                 if msg['type'] == 'lobby':
                     self.root.after(0, self.update_lobby, msg['players'])
 
+
                 elif msg['type'] == 'start':
+
                     self.is_solo = msg.get('is_solo', False)
-                    self.root.after(0, self.start_game)
+                    if not self.is_solo:
+
+                        if 'opponent_next' in msg:
+                            self.opponent_next_piece = msg['opponent_next']
+
+                        if 'opponent_hold' in msg:
+                            self.opponent_hold_piece = msg['opponent_hold']
+                            self.root.after(0, self.start_game)
 
                 elif msg['type'] == 'score' and not self.is_solo:
                     if self.opponent_score_label:
@@ -315,6 +324,15 @@ class TetrisClient:
                 elif msg['type'] == 'game_cancelled':
                     self.root.after(0, self.cancel_countdown)
                     self.root.after(0, self.status_label.config, {"text": "Game cancelled - other player left"})
+
+                elif msg['type'] == 'opponent_next':
+                    self.opponent_next_piece = msg['piece']
+                    self.draw_opponent_next_piece()
+
+                elif msg['type'] == 'opponent_hold':
+                    self.opponent_hold_piece = msg['piece']
+                    self.draw_opponent_hold_piece()
+
 
             except Exception as e:
                 print("Error in client listener:", e)
@@ -374,73 +392,77 @@ class TetrisClient:
             self.status_label.config(text=f"{len(players)} players in lobby - ready up!")
 
     def start_game(self):
-
-
         self.clear_window()
 
         pygame.mixer.init()
         pygame.mixer.music.load("tetrisa.wav")
-        pygame.mixer.music.set_volume(1.0)  # Ensure volume is full
+        pygame.mixer.music.set_volume(1.0)
         pygame.mixer.music.play(-1)
 
         # Set window size based on game mode
         if self.is_solo:
             self.root.geometry("700x650")  # Smaller window for solo
         else:
-            self.root.geometry("1000x650")  # Larger window for multiplayer
+            self.root.geometry("1200x650")  # Wider window for multiplayer
 
         main_frame = tk.Frame(self.root)
         main_frame.pack()
 
+        # Left panel for player's info
+        left_panel = tk.Frame(main_frame, width=200)
+        left_panel.pack(side='left', padx=10)
+
+        # Player's score
+        self.score_label = tk.Label(left_panel, text="Your Score: 0", font=self.FONT_LABEL)
+        self.score_label.pack(pady=10)
+
+        # Player's next piece
+        player_next_frame = tk.Frame(left_panel)
+        player_next_frame.pack(pady=10)
+        tk.Label(player_next_frame, text="Your Next Block", font=self.FONT_LABEL).pack()
+        self.next_piece_canvas = tk.Canvas(player_next_frame, width=120, height=120, bg='grey')
+        self.next_piece_canvas.pack()
+
+        # Player's hold piece
+        player_hold_frame = tk.Frame(left_panel)
+        player_hold_frame.pack(pady=10)
+        tk.Label(player_hold_frame, text="Your Hold Block", font=self.FONT_LABEL).pack()
+        self.hold_piece_canvas = tk.Canvas(player_hold_frame, width=120, height=120, bg='darkgrey')
+        self.hold_piece_canvas.pack()
+
+        # Game boards in the middle
         game_frame = tk.Frame(main_frame)
         game_frame.pack(side='left')
 
-        # Main game canvas
+        # Player's game board
         self.canvas = tk.Canvas(game_frame, width=300, height=600, bg='black')
         self.canvas.pack(side='left', padx=10)
 
-        # Only show opponent canvas in multiplayer mode
+        # Opponent's game board (only in multiplayer)
         if not self.is_solo:
             self.opponent_canvas = tk.Canvas(game_frame, width=300, height=600, bg='black')
             self.opponent_canvas.pack(side='left', padx=10)
 
-        side_panel = tk.Frame(main_frame, width=200)
-        side_panel.pack(side='left', padx=20)
+        # Right panel for opponent's info (only in multiplayer)
+        right_panel = tk.Frame(main_frame, width=200)
+        right_panel.pack(side='left', padx=10)
 
-        # Score display
-        self.score_label = tk.Label(side_panel, text="Your Score: 0", font=self.FONT_LABEL)
-        self.score_label.pack(pady=10)
-
-        # Only show opponent score in multiplayer mode
         if not self.is_solo:
-            self.opponent_score_label = tk.Label(side_panel, text="Opponent Score: 0", font=self.FONT_LABEL)
+            # Opponent's score
+            self.opponent_score_label = tk.Label(right_panel, text="Opponent Score: 0", font=self.FONT_LABEL)
             self.opponent_score_label.pack(pady=10)
 
-        # Next piece display
-        next_frame = tk.Frame(side_panel)
-        next_frame.pack(pady=10)
-        tk.Label(next_frame, text="Next Block", font=self.FONT_LABEL).pack()
-        self.next_piece_canvas = tk.Canvas(next_frame, width=120, height=120, bg='grey')
-        self.next_piece_canvas.pack()
-
-        # Hold piece display
-        hold_frame = tk.Frame(side_panel)
-        hold_frame.pack(pady=10)
-        tk.Label(hold_frame, text="Hold Block", font=self.FONT_LABEL).pack()
-        self.hold_piece_canvas = tk.Canvas(hold_frame, width=120, height=120, bg='darkgrey')
-        self.hold_piece_canvas.pack()
-
-        # Only show opponent pieces in multiplayer mode
-        if not self.is_solo:
-            opp_next_frame = tk.Frame(side_panel)
+            # Opponent's next piece
+            opp_next_frame = tk.Frame(right_panel)
             opp_next_frame.pack(pady=10)
-            tk.Label(opp_next_frame, text="Opponent Next", font=self.FONT_LABEL).pack()
+            tk.Label(opp_next_frame, text="Opponent Next Block", font=self.FONT_LABEL).pack()
             self.opponent_next_canvas = tk.Canvas(opp_next_frame, width=120, height=120, bg='lightgrey')
             self.opponent_next_canvas.pack()
 
-            opp_hold_frame = tk.Frame(side_panel)
+            # Opponent's hold piece
+            opp_hold_frame = tk.Frame(right_panel)
             opp_hold_frame.pack(pady=10)
-            tk.Label(opp_hold_frame, text="Opponent Hold", font=self.FONT_LABEL).pack()
+            tk.Label(opp_hold_frame, text="Opponent Hold Block", font=self.FONT_LABEL).pack()
             self.opponent_hold_canvas = tk.Canvas(opp_hold_frame, width=120, height=120, bg='lightgrey')
             self.opponent_hold_canvas.pack()
 
@@ -451,6 +473,18 @@ class TetrisClient:
         self.score = 0
         self.running = True
         self.can_hold = True
+
+        # Initialize opponent state (for multiplayer)
+        self.opponent_board = [[0] * 10 for _ in range(20)]
+        self.opponent_next_piece = None
+        self.opponent_hold_piece = None
+
+        if not self.is_solo:
+            self.safe_send({
+                'type': 'initial_pieces',
+                'next_piece': self.next_piece,
+                'hold_piece': self.hold_piece
+            })
 
         self.root.bind("<Key>", self.key_press)
         self.game_loop()
@@ -492,14 +526,27 @@ class TetrisClient:
         if not self.can_hold:
             return
         self.can_hold = False
+
         if self.hold_piece is None:
             self.hold_piece = self.current_piece
             self.current_piece = self.next_piece
-            self.next_piece = self.new_piece()
+            self.next_piece = self.new_piece()  # Generate new next piece
         else:
             self.hold_piece, self.current_piece = self.current_piece, self.hold_piece
             self.current_piece['x'] = 5 - len(self.current_piece['shape'][0]) // 2
             self.current_piece['y'] = 0
+
+        # Send updates to opponent
+        if not self.is_solo:
+            self.safe_send({
+                'type': 'hold_piece',
+                'piece': self.hold_piece
+            })
+            self.safe_send({
+                'type': 'next_piece',
+                'piece': self.next_piece
+            })
+
         self.draw_hold_piece()
 
     def draw_tile(self, canvas, x, y, color, tile_size=30):
@@ -559,6 +606,42 @@ class TetrisClient:
                             fill="purple", outline="black"
                         )
 
+    def draw_opponent_next_piece(self):
+        if self.opponent_next_canvas and hasattr(self, 'opponent_next_piece') and self.opponent_next_piece:
+            self.opponent_next_canvas.delete("all")
+            shape = self.opponent_next_piece['shape']
+            tile_size = 15
+            offset_x = (120 - len(shape[0]) * tile_size) // 2
+            offset_y = (120 - len(shape) * tile_size) // 2
+            for y, row in enumerate(shape):
+                for x, val in enumerate(row):
+                    if val:
+                        self.opponent_next_canvas.create_rectangle(
+                            offset_x + x * tile_size,
+                            offset_y + y * tile_size,
+                            offset_x + (x + 1) * tile_size,
+                            offset_y + (y + 1) * tile_size,
+                            fill="red", outline="black"
+                        )
+
+    def draw_opponent_hold_piece(self):
+        if self.opponent_hold_canvas and hasattr(self, 'opponent_hold_piece') and self.opponent_hold_piece:
+            self.opponent_hold_canvas.delete("all")
+            shape = self.opponent_hold_piece['shape']
+            tile_size = 15
+            offset_x = (120 - len(shape[0]) * tile_size) // 2
+            offset_y = (120 - len(shape) * tile_size) // 2
+            for y, row in enumerate(shape):
+                for x, val in enumerate(row):
+                    if val:
+                        self.opponent_hold_canvas.create_rectangle(
+                            offset_x + x * tile_size,
+                            offset_y + y * tile_size,
+                            offset_x + (x + 1) * tile_size,
+                            offset_y + (y + 1) * tile_size,
+                            fill="red", outline="black"
+                        )
+
     def move(self, dx, dy):
         self.current_piece['x'] += dx
         self.current_piece['y'] += dy
@@ -601,6 +684,13 @@ class TetrisClient:
         self.current_piece = self.next_piece
         self.next_piece = self.new_piece()
         self.can_hold = True
+
+        if not self.is_solo:
+            self.safe_send({
+                'type': 'next_piece',
+                'piece': self.next_piece
+            })
+
         if self.collision():
             self.running = False
             if self.score_label:

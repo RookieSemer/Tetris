@@ -2,7 +2,7 @@ import socket
 import threading
 import json
 import time
-from collections import defaultdict
+
 
 HOST = '127.0.0.1'
 PORT = 5555
@@ -77,6 +77,40 @@ def handle_client(conn, addr):
             elif msg['type'] == 'board':
                 broadcast({'type': 'board', 'board': msg['board']}, sender_conn=conn)
 
+            elif msg['type'] == 'next_piece':
+
+                with lock:
+                    opponent = next((c for c in clients if c['conn'] != conn), None)
+                    if opponent:
+                        try:
+                            opponent['conn'].send(json.dumps({
+                                'type': 'opponent_next',
+                                'piece': msg['piece']
+                            }).encode())
+                        except:
+                            pass
+
+            elif msg['type'] == 'hold_piece':
+                # Broadcast the player's hold piece to opponent
+                with lock:
+                    opponent = next((c for c in clients if c['conn'] != conn), None)
+                    if opponent:
+                        try:
+                            opponent['conn'].send(json.dumps({
+                                'type': 'opponent_hold',
+                                'piece': msg['piece']
+                            }).encode())
+                        except:
+                            pass
+            elif msg['type'] == 'initial_pieces':
+                with lock:
+                    # Update this client's piece information
+                    for client in clients:
+                        if client['conn'] == conn:
+                            client['next_piece'] = msg.get('next_piece')
+                            client['hold_piece'] = msg.get('hold_piece')
+                            break
+
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:
@@ -113,13 +147,36 @@ def update_lobby():
             except:
                 pass
 
+
 def start_game_with_countdown():
     global game_in_progress
     try:
         for i in range(3, 0, -1):
             broadcast({'type': 'countdown', 'value': i})
             time.sleep(1)
-        broadcast({'type': 'start', 'is_solo': False})
+
+        # After countdown, exchange initial pieces
+        with lock:
+            if len(clients) == 2:
+                client1, client2 = clients[0], clients[1]
+
+                # Send each client their opponent's initial pieces
+                try:
+                    client1['conn'].send(json.dumps({
+                        'type': 'start',
+                        'is_solo': False,
+                        'opponent_next': client2.get('next_piece'),
+                        'opponent_hold': client2.get('hold_piece')
+                    }).encode())
+
+                    client2['conn'].send(json.dumps({
+                        'type': 'start',
+                        'is_solo': False,
+                        'opponent_next': client1.get('next_piece'),
+                        'opponent_hold': client1.get('hold_piece')
+                    }).encode())
+                except:
+                    pass
     except:
         pass
     finally:
